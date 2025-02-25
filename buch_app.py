@@ -9,6 +9,7 @@ try:
     import imageio_ffmpeg
     from pydub import AudioSegment
     ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+    st.write("Verwendeter ffmpeg-Pfad (imageio-ffmpeg):", ffmpeg_path)
     if not os.path.exists(ffmpeg_path):
         st.error(f"ffmpeg wurde nicht gefunden unter {ffmpeg_path}. Bitte stellen Sie sicher, dass ffmpeg installiert ist.")
     AudioSegment.converter = ffmpeg_path
@@ -18,14 +19,11 @@ except ImportError:
         st.error("ffmpeg wurde nicht gefunden. Bitte installieren Sie ffmpeg oder fügen Sie es dem PATH hinzu.")
 
 from openai import OpenAI
-
-
 # OpenAI API-Schlüssel Setup
 # Zugriff auf den API-Schlüssel aus den Streamlit-Secrets
 OPENAI_API_KEY = st.secrets["openai"]["api_key"]
 # Initialisiere den OpenAI-Client
 client = OpenAI(api_key=OPENAI_API_KEY)
-
 
 # Maximale Zeichen pro Anfrage (hidden Limit des TTS-Modells)
 MAX_CHARS = 4096
@@ -33,18 +31,22 @@ MAX_CHARS = 4096
 def text_to_speech(text, voice, model):
     """
     Wandelt einen Text in Sprache um und speichert das Audio in einer temporären MP3-Datei.
+    Falls ein Fehler auftritt, wird ein Fehlerstring zurückgegeben, der mit "Error:" beginnt.
     """
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio_file:
+            temp_file = temp_audio_file.name
             response = client.audio.speech.create(
                 model=model,
                 voice=voice,
                 input=text
             )
-            response.stream_to_file(temp_audio_file.name)
-            return temp_audio_file.name
+            response.stream_to_file(temp_file)
+        if not os.path.exists(temp_file):
+            return "Error: Temporäre Audio-Datei wurde nicht erstellt: " + temp_file
+        return temp_file
     except Exception as e:
-        return str(e)
+        return "Error: " + str(e)
 
 def chunk_text(text, max_length=MAX_CHARS):
     """
@@ -68,7 +70,7 @@ def convert_text_to_speech(text, voice, model):
     """
     Konvertiert den gesamten Text in Sprache. Überschreitet der Text das Limit von MAX_CHARS,
     wird er in mehrere Stücke aufgeteilt, einzeln verarbeitet und anschließend zusammengefügt.
-    Dabei werden detaillierte Fortschrittsmeldungen angezeigt.
+    Währenddessen werden Fortschrittsmeldungen angezeigt.
     """
     if len(text) <= MAX_CHARS:
         return text_to_speech(text, voice, model)
@@ -81,11 +83,17 @@ def convert_text_to_speech(text, voice, model):
         for i, chunk in enumerate(chunks):
             progress_text.text(f"Verarbeite Chunk {i+1} von {total}...")
             audio_path = text_to_speech(chunk, voice, model)
+            if audio_path.startswith("Error:"):
+                st.error(f"Fehler bei Chunk {i+1}: {audio_path}")
+                return audio_path
             if not os.path.exists(audio_path):
                 st.error(f"Audio-Datei für Chunk {i+1} nicht gefunden: {audio_path}")
                 return f"Error: Audio-Datei für Chunk {i+1} nicht gefunden"
-            # Lade den erzeugten Audio-Chunk
-            segment = AudioSegment.from_mp3(audio_path)
+            try:
+                segment = AudioSegment.from_mp3(audio_path)
+            except Exception as ex:
+                st.error(f"Fehler beim Laden von Chunk {i+1}: {ex}")
+                return f"Error: Fehler beim Laden von Chunk {i+1}: {ex}"
             if combined_audio is None:
                 combined_audio = segment
             else:
@@ -193,7 +201,7 @@ if st.button("Text in Sprache umwandeln"):
                 voices[selected_voice],
                 modelle[selected_model]["model"]
             )
-        if isinstance(audio_file_path, str) and audio_file_path.startswith("Error"):
+        if isinstance(audio_file_path, str) and audio_file_path.startswith("Error:"):
             st.error(f"Ein Fehler ist aufgetreten: {audio_file_path}")
         else:
             st.success("Umwandlung abgeschlossen!")
@@ -252,7 +260,7 @@ if uploaded_file is not None:
                     voices[selected_voice],
                     modelle[selected_model]["model"]
                 )
-            if isinstance(audio_file_path, str) and audio_file_path.startswith("Error"):
+            if isinstance(audio_file_path, str) and audio_file_path.startswith("Error:"):
                 st.error(f"Ein Fehler ist aufgetreten: {audio_file_path}")
             else:
                 st.success("Umwandlung abgeschlossen!")
@@ -267,4 +275,3 @@ if uploaded_file is not None:
 
 st.markdown("</div>", unsafe_allow_html=True)
 st.markdown("Erstellt mit ❤️ unter Verwendung von Streamlit und dem OpenAI TTS-Modell")
-
