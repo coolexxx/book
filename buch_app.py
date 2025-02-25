@@ -9,7 +9,6 @@ try:
     import imageio_ffmpeg
     from pydub import AudioSegment
     ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-    # Prüfen, ob der Pfad existiert
     if not os.path.exists(ffmpeg_path):
         st.error(f"ffmpeg wurde nicht gefunden unter {ffmpeg_path}. Bitte stellen Sie sicher, dass ffmpeg installiert ist.")
     AudioSegment.converter = ffmpeg_path
@@ -20,11 +19,13 @@ except ImportError:
 
 from openai import OpenAI
 
+
 # OpenAI API-Schlüssel Setup
 # Zugriff auf den API-Schlüssel aus den Streamlit-Secrets
 OPENAI_API_KEY = st.secrets["openai"]["api_key"]
 # Initialisiere den OpenAI-Client
 client = OpenAI(api_key=OPENAI_API_KEY)
+
 
 # Maximale Zeichen pro Anfrage (hidden Limit des TTS-Modells)
 MAX_CHARS = 4096
@@ -67,6 +68,7 @@ def convert_text_to_speech(text, voice, model):
     """
     Konvertiert den gesamten Text in Sprache. Überschreitet der Text das Limit von MAX_CHARS,
     wird er in mehrere Stücke aufgeteilt, einzeln verarbeitet und anschließend zusammengefügt.
+    Dabei werden detaillierte Fortschrittsmeldungen angezeigt.
     """
     if len(text) <= MAX_CHARS:
         return text_to_speech(text, voice, model)
@@ -74,19 +76,25 @@ def convert_text_to_speech(text, voice, model):
         chunks = chunk_text(text)
         combined_audio = None
         progress_bar = st.progress(0)
+        progress_text = st.empty()
+        total = len(chunks)
         for i, chunk in enumerate(chunks):
+            progress_text.text(f"Verarbeite Chunk {i+1} von {total}...")
             audio_path = text_to_speech(chunk, voice, model)
-            if isinstance(audio_path, str) and audio_path.startswith("Error"):
-                return audio_path  # Fehlerbehandlung
-            # Laden des erzeugten Audio-Chunks (ffmpeg wird über imageio-ffmpeg bereitgestellt)
+            if not os.path.exists(audio_path):
+                st.error(f"Audio-Datei für Chunk {i+1} nicht gefunden: {audio_path}")
+                return f"Error: Audio-Datei für Chunk {i+1} nicht gefunden"
+            # Lade den erzeugten Audio-Chunk
             segment = AudioSegment.from_mp3(audio_path)
             if combined_audio is None:
                 combined_audio = segment
             else:
                 combined_audio += segment
-            progress_bar.progress((i + 1) / len(chunks))
+            progress_bar.progress((i+1)/total)
+        progress_text.text("Alle Chunks verarbeitet, kombiniere Audio...")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as out_file:
             combined_audio.export(out_file.name, format="mp3")
+            progress_text.text("Audio-Kombination abgeschlossen.")
             return out_file.name
 
 def estimate_price_and_duration(text, rate_per_million):
@@ -259,3 +267,4 @@ if uploaded_file is not None:
 
 st.markdown("</div>", unsafe_allow_html=True)
 st.markdown("Erstellt mit ❤️ unter Verwendung von Streamlit und dem OpenAI TTS-Modell")
+
