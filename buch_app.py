@@ -2,28 +2,32 @@ import streamlit as st
 import tempfile
 import re
 import shutil
+import os
 
-# Versuchen, imageio-ffmpeg zu verwenden, um ffmpeg bereitzustellen
+# Versuchen, imageio-ffmpeg zu verwenden, um einen ffmpeg-Binary bereitzustellen.
 try:
     import imageio_ffmpeg
     from pydub import AudioSegment
-
-    AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+    # Prüfen, ob der Pfad existiert
+    if not os.path.exists(ffmpeg_path):
+        st.error(f"ffmpeg wurde nicht gefunden unter {ffmpeg_path}. Bitte stellen Sie sicher, dass ffmpeg installiert ist.")
+    AudioSegment.converter = ffmpeg_path
 except ImportError:
     from pydub import AudioSegment
-
     if not shutil.which("ffmpeg"):
         st.error("ffmpeg wurde nicht gefunden. Bitte installieren Sie ffmpeg oder fügen Sie es dem PATH hinzu.")
 
 from openai import OpenAI
 
-# OpenAI-Client initialisieren mit Dummy-API-Key
+# OpenAI API-Schlüssel Setup
+# Zugriff auf den API-Schlüssel aus den Streamlit-Secrets
 OPENAI_API_KEY = st.secrets["openai"]["api_key"]
+# Initialisiere den OpenAI-Client
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Maximale Zeichen pro Anfrage (hidden Limit des TTS-Modells)
 MAX_CHARS = 4096
-
 
 def text_to_speech(text, voice, model):
     """
@@ -40,7 +44,6 @@ def text_to_speech(text, voice, model):
             return temp_audio_file.name
     except Exception as e:
         return str(e)
-
 
 def chunk_text(text, max_length=MAX_CHARS):
     """
@@ -59,7 +62,6 @@ def chunk_text(text, max_length=MAX_CHARS):
     if current_chunk:
         chunks.append(current_chunk)
     return chunks
-
 
 def convert_text_to_speech(text, voice, model):
     """
@@ -87,7 +89,6 @@ def convert_text_to_speech(text, voice, model):
             combined_audio.export(out_file.name, format="mp3")
             return out_file.name
 
-
 def estimate_price_and_duration(text, rate_per_million):
     """
     Schätzt die Kosten basierend auf der Anzahl der Zeichen.
@@ -100,7 +101,6 @@ def estimate_price_and_duration(text, rate_per_million):
     estimated_seconds = word_count * 0.4
     return estimated_cost, estimated_seconds
 
-
 def format_duration(seconds):
     """
     Formatiert die Dauer in Minuten und Sekunden.
@@ -112,7 +112,6 @@ def format_duration(seconds):
     else:
         return f"{sec} Sekunden"
 
-
 def fix_line_breaks(text):
     """
     Ersetzt einzelne Zeilenumbrüche innerhalb von Absätzen durch ein Leerzeichen,
@@ -120,14 +119,11 @@ def fix_line_breaks(text):
     """
     return re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
 
-
 def correct_direct_text():
     st.session_state.text_input = fix_line_breaks(st.session_state.text_input)
 
-
 def correct_file_text():
     st.session_state.file_text = fix_line_breaks(st.session_state.file_text)
-
 
 # Seiten-Konfiguration und CSS für ein ansprechendes Layout
 st.set_page_config(page_title="Maxis Hörbuchmaker: Text zu Sprache", page_icon="🔊", layout="centered")
@@ -216,7 +212,6 @@ if uploaded_file is not None:
     if uploaded_file.type == "application/pdf":
         try:
             import PyPDF2
-
             pdf_reader = PyPDF2.PdfReader(uploaded_file)
             for page in pdf_reader.pages:
                 extracted_text += page.extract_text() + "\n"
@@ -234,12 +229,11 @@ if uploaded_file is not None:
     st.text(extracted_text)
     st.text_area("Bearbeiten Sie den extrahierten Text:", value=extracted_text, key="file_text", height=150)
     st.button("Zeilenumbrüche im extrahierten Text korrigieren", on_click=correct_file_text)
-
+    
     estimated_cost, estimated_seconds = estimate_price_and_duration(extracted_text, rate)
-    st.markdown(f'<p class="estimate">Geschätzte Dauer: {format_duration(estimated_seconds)}</p>',
-                unsafe_allow_html=True)
+    st.markdown(f'<p class="estimate">Geschätzte Dauer: {format_duration(estimated_seconds)}</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="estimate">Geschätzte Kosten: ${estimated_cost:.2f}</p>', unsafe_allow_html=True)
-
+    
     if st.button("Preis bestätigen und TTS starten"):
         if st.session_state.file_text.strip() == "":
             st.warning("Bitte bearbeiten Sie den Text oder laden Sie eine gültige Datei hoch.")
