@@ -4,48 +4,45 @@ import re
 import shutil
 import os
 
-# st.set_page_config MUSS ganz oben stehen
+# IMPORTANT: st.set_page_config MUSS als erstes kommen!
 st.set_page_config(page_title="Maxis Hörbuchmaker: Text zu Sprache", page_icon="🔊", layout="centered")
 
-# Versuchen, imageio-ffmpeg zu verwenden, um den ffmpeg-Binary bereitzustellen.
-try:
-    import imageio_ffmpeg
-    from pydub import AudioSegment
-    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-    # Debug-Ausgabe (kann entfernt werden)
-    st.write("Verwendeter ffmpeg-Pfad (imageio-ffmpeg):", ffmpeg_path)
-    if not os.path.exists(ffmpeg_path):
-        st.error(f"ffmpeg wurde nicht gefunden unter {ffmpeg_path}. Bitte stellen Sie sicher, dass ffmpeg installiert ist.")
-    AudioSegment.converter = ffmpeg_path
-
-    # Versuchen, den ffprobe-Pfad aus dem ffmpeg-Pfad abzuleiten.
-    if "ffmpeg" in ffmpeg_path:
+# Versuch, system-weites ffmpeg (und ffprobe) zu nutzen
+from pydub import AudioSegment
+system_ffmpeg = shutil.which("ffmpeg")
+system_ffprobe = shutil.which("ffprobe")
+if system_ffmpeg and system_ffprobe:
+    AudioSegment.converter = system_ffmpeg
+    AudioSegment.ffprobe = system_ffprobe
+else:
+    # Falls kein system-weites ffmpeg gefunden wurde, versuche imageio-ffmpeg zu nutzen
+    try:
+        import imageio_ffmpeg
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        AudioSegment.converter = ffmpeg_path
+        # Versuche, den ffprobe-Pfad aus dem ffmpeg-Pfad abzuleiten
         ffprobe_candidate = ffmpeg_path.replace("ffmpeg", "ffprobe")
         if os.path.exists(ffprobe_candidate):
             AudioSegment.ffprobe = ffprobe_candidate
-            st.write("Verwendeter ffprobe-Pfad:", ffprobe_candidate)
         else:
-            st.error("ffprobe wurde nicht gefunden unter: " + ffprobe_candidate)
-except ImportError:
-    from pydub import AudioSegment
-    if not shutil.which("ffmpeg"):
+            st.error("ffprobe wurde nicht gefunden. Bitte stellen Sie sicher, dass ffmpeg (inklusive ffprobe) installiert ist.")
+    except ImportError:
         st.error("ffmpeg wurde nicht gefunden. Bitte installieren Sie ffmpeg oder fügen Sie es dem PATH hinzu.")
 
 from openai import OpenAI
+
 # OpenAI API-Schlüssel Setup
 # Zugriff auf den API-Schlüssel aus den Streamlit-Secrets
 OPENAI_API_KEY = st.secrets["openai"]["api_key"]
 # Initialisiere den OpenAI-Client
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-
-# Maximale Zeichen pro Anfrage (hidden Limit des TTS-Modells)
-MAX_CHARS = 4096
+MAX_CHARS = 4096  # Maximale Zeichen pro Anfrage (hidden Limit des TTS-Modells)
 
 def text_to_speech(text, voice, model):
     """
     Wandelt einen Text in Sprache um und speichert das Audio in einer temporären MP3-Datei.
-    Falls ein Fehler auftritt, wird ein Fehlerstring zurückgegeben, der mit "Error:" beginnt.
+    Gibt im Fehlerfall einen String zurück, der mit "Error:" beginnt.
     """
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio_file:
@@ -64,10 +61,9 @@ def text_to_speech(text, voice, model):
 
 def chunk_text(text, max_length=MAX_CHARS):
     """
-    Zerlegt den Text in sinnvolle Stücke, die jeweils höchstens max_length Zeichen enthalten.
-    Dabei wird der originale Whitespace (einschließlich Zeilenumbrüche) beibehalten.
+    Zerlegt den Text in Stücke mit höchstens max_length Zeichen, behält dabei alle Whitespace-Zeichen.
     """
-    tokens = re.split(r'(\s+)', text)  # trennt Text und Whitespace
+    tokens = re.split(r'(\s+)', text)
     chunks = []
     current_chunk = ""
     for token in tokens:
@@ -82,9 +78,8 @@ def chunk_text(text, max_length=MAX_CHARS):
 
 def convert_text_to_speech(text, voice, model):
     """
-    Konvertiert den gesamten Text in Sprache. Überschreitet der Text das Limit von MAX_CHARS,
-    wird er in mehrere Stücke aufgeteilt, einzeln verarbeitet und anschließend zusammengefügt.
-    Währenddessen werden Fortschrittsmeldungen angezeigt.
+    Teilt den Text in Chunks, falls er zu lang ist, und fügt die resultierenden Audios zusammen.
+    Zeigt dabei einen Fortschrittsbalken und Statusmeldungen an.
     """
     if len(text) <= MAX_CHARS:
         return text_to_speech(text, voice, model)
@@ -92,10 +87,10 @@ def convert_text_to_speech(text, voice, model):
         chunks = chunk_text(text)
         combined_audio = None
         progress_bar = st.progress(0)
-        progress_text = st.empty()
+        status = st.empty()
         total = len(chunks)
         for i, chunk in enumerate(chunks):
-            progress_text.text(f"Verarbeite Chunk {i+1} von {total}...")
+            status.text(f"Verarbeite Chunk {i+1} von {total}...")
             audio_path = text_to_speech(chunk, voice, model)
             if audio_path.startswith("Error:"):
                 st.error(f"Fehler bei Chunk {i+1}: {audio_path}")
@@ -113,17 +108,16 @@ def convert_text_to_speech(text, voice, model):
             else:
                 combined_audio += segment
             progress_bar.progress((i+1)/total)
-        progress_text.text("Alle Chunks verarbeitet, kombiniere Audio...")
+        status.text("Alle Chunks verarbeitet, kombiniere Audio...")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as out_file:
             combined_audio.export(out_file.name, format="mp3")
-            progress_text.text("Audio-Kombination abgeschlossen.")
+            status.text("Audio-Kombination abgeschlossen.")
             return out_file.name
 
 def estimate_price_and_duration(text, rate_per_million):
     """
-    Schätzt die Kosten basierend auf der Anzahl der Zeichen.
-    Preisberechnung: (Anzahl Zeichen / 1.000.000) * rate_per_million.
-    Für die Dauer nehmen wir an, dass ein Wort ca. 0.4 Sekunden dauert.
+    Schätzt Kosten und Dauer basierend auf der Zeichenanzahl.
+    Dauer: Annahme 0,4 Sekunden pro Wort.
     """
     char_count = len(text)
     estimated_cost = (char_count / 1_000_000) * rate_per_million
@@ -133,7 +127,7 @@ def estimate_price_and_duration(text, rate_per_million):
 
 def format_duration(seconds):
     """
-    Formatiert die Dauer in Minuten und Sekunden.
+    Formatiert Sekunden in Minuten und Sekunden.
     """
     minutes = int(seconds // 60)
     sec = int(seconds % 60)
@@ -144,8 +138,8 @@ def format_duration(seconds):
 
 def fix_line_breaks(text):
     """
-    Ersetzt einzelne Zeilenumbrüche innerhalb von Absätzen durch ein Leerzeichen,
-    behält aber doppelte Zeilenumbrüche als Absatztrenner.
+    Ersetzt einfache Zeilenumbrüche innerhalb eines Absatzes durch Leerzeichen,
+    lässt aber doppelte Zeilenumbrüche als Absatztrenner.
     """
     return re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
 
@@ -155,7 +149,10 @@ def correct_direct_text():
 def correct_file_text():
     st.session_state.file_text = fix_line_breaks(st.session_state.file_text)
 
-# Layout und Seiteninhalte
+# --- Layout & UI ---
+
+# Keine Debug-Ausgaben hier – alle Hinweise erscheinen nur in Fehlerfällen.
+
 st.markdown(
     """
     <style>
@@ -169,18 +166,13 @@ st.markdown(
 )
 st.markdown('<div class="main">', unsafe_allow_html=True)
 st.title("Maxis Hörbuchmaker: Text zu Sprache")
-st.markdown("Diese App ermöglicht es Ihnen, Text in Sprache umzuwandeln – ideal für Hörbücher und mehr.")
+st.markdown("Diese App wandelt Text in Sprache um – ideal für Hörbücher und mehr.")
 
-# Auswahl der Sprache (Hinweis: Wird aktuell nicht an die API weitergegeben)
-sprachen = {
-    "Deutsch": "de",
-    "English": "en",
-    "Français": "fr",
-    "Español": "es"
-}
+# Sprache (nur als Auswahl, wird aktuell nicht an die API weitergegeben)
+sprachen = {"Deutsch": "de", "English": "en", "Français": "fr", "Español": "es"}
 selected_language = st.selectbox("Wählen Sie die Sprache:", list(sprachen.keys()))
 
-# Auswahl des Modells (Preisangabe pro 1M Zeichen)
+# Modelle (Preisangabe pro 1M Zeichen)
 modelle = {
     "TTS Speech generation ($15.00 / 1M characters)": {"model": "tts-1", "rate": 15.00},
     "TTS HD Speech generation ($30.00 / 1M characters)": {"model": "tts-1-hd", "rate": 30.00}
@@ -188,7 +180,7 @@ modelle = {
 selected_model = st.selectbox("Wählen Sie das Modell:", list(modelle.keys()))
 rate = modelle[selected_model]["rate"]
 
-# Auswahl der Stimme
+# Stimmenauswahl
 voices = {
     "Alloy (Neutral)": "alloy",
     "Echo (Männlich)": "echo",
@@ -201,7 +193,7 @@ selected_voice = st.selectbox("Wählen Sie eine Stimme:", list(voices.keys()))
 
 st.markdown("---")
 st.subheader("Direkte Texteingabe")
-st.text_area("Geben Sie den Text ein, den Sie in Sprache umwandeln möchten:", key="text_input", height=150)
+st.text_area("Geben Sie den Text ein, den Sie umwandeln möchten:", key="text_input", height=150)
 st.button("Zeilenumbrüche korrigieren", on_click=correct_direct_text)
 
 if st.button("Text in Sprache umwandeln"):
@@ -231,11 +223,7 @@ st.markdown("---")
 st.subheader("Datei Upload und Bearbeitung")
 uploaded_file = st.file_uploader("Laden Sie eine PDF, EPUB, TXT etc. hoch", type=["pdf", "epub", "txt"])
 if uploaded_file is not None:
-    file_details = {
-        "Dateiname": uploaded_file.name,
-        "Dateityp": uploaded_file.type,
-        "Größe": uploaded_file.size
-    }
+    file_details = {"Dateiname": uploaded_file.name, "Dateityp": uploaded_file.type, "Größe": uploaded_file.size}
     st.write(file_details)
     extracted_text = ""
     if uploaded_file.type == "application/pdf":
@@ -253,7 +241,6 @@ if uploaded_file is not None:
             extracted_text = uploaded_file.read().decode("utf-8")
         except Exception as e:
             extracted_text = f"Fehler beim Lesen der Datei: {e}"
-
     st.markdown("**Extrahierter Text:**")
     st.text(extracted_text)
     st.text_area("Bearbeiten Sie den extrahierten Text:", value=extracted_text, key="file_text", height=150)
