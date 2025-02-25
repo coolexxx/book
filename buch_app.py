@@ -1,4 +1,6 @@
 import streamlit as st
+st.set_page_config(page_title="Maxis Hörbuchmaker: Text zu Sprache", page_icon="🔊", layout="centered")
+
 import tempfile
 import re
 import shutil
@@ -9,6 +11,7 @@ try:
     import imageio_ffmpeg
     from pydub import AudioSegment
     ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+    # Zeige den verwendeten ffmpeg-Pfad in den Logs an.
     st.write("Verwendeter ffmpeg-Pfad (imageio-ffmpeg):", ffmpeg_path)
     if not os.path.exists(ffmpeg_path):
         st.error(f"ffmpeg wurde nicht gefunden unter {ffmpeg_path}. Bitte stellen Sie sicher, dass ffmpeg installiert ist.")
@@ -24,6 +27,7 @@ from openai import OpenAI
 OPENAI_API_KEY = st.secrets["openai"]["api_key"]
 # Initialisiere den OpenAI-Client
 client = OpenAI(api_key=OPENAI_API_KEY)
+
 
 # Maximale Zeichen pro Anfrage (hidden Limit des TTS-Modells)
 MAX_CHARS = 4096
@@ -141,8 +145,7 @@ def correct_direct_text():
 def correct_file_text():
     st.session_state.file_text = fix_line_breaks(st.session_state.file_text)
 
-# Seiten-Konfiguration und CSS für ein ansprechendes Layout
-st.set_page_config(page_title="Maxis Hörbuchmaker: Text zu Sprache", page_icon="🔊", layout="centered")
+# Layout und Seiteninhalte
 st.markdown(
     """
     <style>
