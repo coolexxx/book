@@ -1,21 +1,31 @@
 import streamlit as st
-st.set_page_config(page_title="Maxis Hörbuchmaker: Text zu Sprache", page_icon="🔊", layout="centered")
-
 import tempfile
 import re
 import shutil
 import os
 
-# Versuchen, imageio-ffmpeg zu verwenden, um einen ffmpeg-Binary bereitzustellen.
+# st.set_page_config MUSS ganz oben stehen
+st.set_page_config(page_title="Maxis Hörbuchmaker: Text zu Sprache", page_icon="🔊", layout="centered")
+
+# Versuchen, imageio-ffmpeg zu verwenden, um den ffmpeg-Binary bereitzustellen.
 try:
     import imageio_ffmpeg
     from pydub import AudioSegment
     ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-    # Zeige den verwendeten ffmpeg-Pfad in den Logs an.
+    # Debug-Ausgabe (kann entfernt werden)
     st.write("Verwendeter ffmpeg-Pfad (imageio-ffmpeg):", ffmpeg_path)
     if not os.path.exists(ffmpeg_path):
         st.error(f"ffmpeg wurde nicht gefunden unter {ffmpeg_path}. Bitte stellen Sie sicher, dass ffmpeg installiert ist.")
     AudioSegment.converter = ffmpeg_path
+
+    # Versuchen, den ffprobe-Pfad aus dem ffmpeg-Pfad abzuleiten.
+    if "ffmpeg" in ffmpeg_path:
+        ffprobe_candidate = ffmpeg_path.replace("ffmpeg", "ffprobe")
+        if os.path.exists(ffprobe_candidate):
+            AudioSegment.ffprobe = ffprobe_candidate
+            st.write("Verwendeter ffprobe-Pfad:", ffprobe_candidate)
+        else:
+            st.error("ffprobe wurde nicht gefunden unter: " + ffprobe_candidate)
 except ImportError:
     from pydub import AudioSegment
     if not shutil.which("ffmpeg"):
